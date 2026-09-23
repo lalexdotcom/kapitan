@@ -1,6 +1,6 @@
 {
 	"name": "kapitan",
-	"version": "0.0.1",
+	"version": "1.0.0",
 	"description": "A small, type-first CLI framework for Node.js — commander.js-like ergonomics, fully typed.",
 	"keywords": [
 		"cli",
