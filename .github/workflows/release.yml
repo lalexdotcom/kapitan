@@ -1,0 +1,20 @@
+name: Release and Publish
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "v*.*.*-*"
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: lalexdotcom/action-release-and-publish@v2
+        with:
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
