@@ -6,8 +6,15 @@ on:
       - "v*.*.*"
       - "v*.*.*-*"
 
+permissions:
+  contents: read
+
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: ci
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -18,3 +25,16 @@ jobs:
         with:
           npm-token: ${{ secrets.NPM_TOKEN }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # A tag whose commit fails CI is never released: remove it so the version can
+  # be re-tagged once fixed. A cancelled run keeps its tag.
+  delete-tag:
+    needs: ci
+    if: ${{ always() && needs.ci.result == 'failure' }}
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

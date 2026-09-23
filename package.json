@@ -2,21 +2,67 @@
 	"name": "kapitan",
 	"version": "0.0.1",
 	"description": "A small, type-first CLI framework for Node.js — commander.js-like ergonomics, fully typed.",
+	"keywords": [
+		"cli",
+		"command-line",
+		"commander",
+		"argv",
+		"parser",
+		"options",
+		"arguments",
+		"typescript",
+		"type-safe"
+	],
+	"homepage": "https://github.com/lalexdotcom/kapitan#readme",
+	"bugs": {
+		"url": "https://github.com/lalexdotcom/kapitan/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/lalexdotcom/kapitan.git"
+	},
 	"author": {
 		"name": "Alexandre LEGOUT",
 		"url": "https://github.com/lalexdotcom"
 	},
 	"license": "MIT",
+	"type": "module",
+	"sideEffects": false,
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
 	"files": [
-		"README.md",
-		"LICENSE"
+		"dist",
+		"SKILL.md",
+		"llms-full.txt"
 	],
+	"engines": {
+		"node": "^20.19.0 || >=22.12.0"
+	},
 	"scripts": {
-		"build": "echo \"Nothing to build\""
+		"build": "rslib build",
+		"dev": "rslib build --watch",
+		"test": "rstest run",
+		"typecheck": "tsc --noEmit -p .",
+		"lint": "biome check .",
+		"showcase": "tsx scripts/showcase.ts"
+	},
+	"dependencies": {
+		"fecha": "^4.2.3"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.11",
+		"@rslib/core": "^1.0.2",
+		"@rstest/core": "^0.12.1",
+		"@types/node": "^20.19.43",
 		"playwright": "^1.62.1",
+		"publint": "^0.3.24",
 		"tsx": "^4.23.13",
 		"typescript": "^7.0.2"
 	},

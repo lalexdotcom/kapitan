@@ -1,0 +1,311 @@
+# kapitan — full reference for LLMs
+
+kapitan is a type-first, commander.js-like CLI framework for Node.js. This file
+is the complete, self-contained reference: read it end-to-end before generating
+kapitan code. Everything here reflects the actual public API in `src/index.ts`.
+
+Golden rules when writing kapitan code:
+- The ONLY public entry points are the `program` singleton and the `Program` /
+  `Group` / `Command` / `CliError` types. Never import from `src/*` internals.
+- Never annotate the `action` callback's parameter — the builder infers it.
+- Never annotate function return types (repo convention).
+- Option/argument names are declared in kebab-case and READ in camelCase.
+- The builder is order-free within a node; `.start()` / `.startAsync()` come last.
+
+## Import surface
+
+```ts
+import { program } from 'kapitan';
+import type { Program, Group, Command, CliError } from 'kapitan';
+```
+
+`program` is a shared singleton (one per process). A CLI is defined by chaining
+builders on it and finishing with `program.start()` (sync) or
+`program.startAsync()` (async). There is no `new Program()`.
+
+## Node kinds
+
+- program (root): the singleton. Has options, arguments, inject, hooks, children,
+  action, `.version()`, `.description()`, `.config()`, `.start()`, `.startAsync()`.
+- group: opened with `.sub(name)`. Holds child commands/groups, options, inject,
+  hooks, `.description()`. Has NO `.action()` and NO `.argument()`.
+- command (leaf): opened with `.command(name)`. Has options, arguments, inject,
+  hooks, `.action()`, `.description()`. Has NO children.
+
+Parent options, injected values and hooks are inherited by every descendant.
+
+## Builder methods (exact signatures & semantics)
+
+### .version(v: string)  — root only
+Enables the built-in `--version` / `-V`. One-shot. Order-free with
+`.description()`: both `.version(x).description(y)` and `.description(y).version(x)`
+compile. Once any body method (option/command/…) is called, both drop.
+
+### .description(text: string)  — program / group / command
+Sets the header line shown in `--help`. One-shot per node.
+
+### .config(config: ProgramConfig)  — root only
+```ts
+type ProgramConfig = {
+  dateFormat?: string;      // fecha token format for 'date'     (default 'YYYY-MM-DD')
+  dateTimeFormat?: string;  // fecha token format for 'datetime' (default 'YYYY-MM-DD HH:mm:ss')
+  errorHandler?: (errors: CliError[]) => void; // see "Errors"
+};
+```
+Format literals are validated at COMPILE TIME against fecha's token subset (see
+"Option types"): a miscased/unknown token is a type error. `dateFormat` accepts
+date tokens only; `dateTimeFormat` also accepts the time tokens.
+
+### .option(name, opts?)  — program / group / command
+Declares a flag and GROWS the resolved options type. `name` is kebab-case; the
+resolved key is camelCase.
+```ts
+type OptionOptions = {
+  required?: boolean;   // required → key is non-optional in the options type
+  default?: unknown;    // presence of a default also makes the key non-optional
+  type?: OptionsOptionType;         // see "Option types"
+  array?: boolean;      // true → repeatable; value is T[]
+  description?: string; // shown in --help
+  var?: string;         // store under this key instead of the flag name
+  alias?: (string | { name: string; short?: boolean })[];
+  //   'out'                    → long alias  --out
+  //   { name: 'o', short: true } → short alias -o
+  //   { name: 'out' }          → long alias  --out
+};
+```
+Overloads: `.option('name')` (bare string flag), `.option('name', opts)`, and a
+`var` overload storing under `opts.var`. Redeclaring an existing key or flag is a
+compile-time error (the name/flag type resolves to `never`).
+
+### .inject(name, valueOrFactory)  — program / group / command
+Adds an always-present, non-CLI value to `options`. Pass a value or a
+zero-arg factory `() => T`; the resolved type is `T` (or the factory's return).
+```ts
+program.inject('now', () => new Date());   // options.now: Date
+program.inject('config', loadedConfig);    // options.config: typeof loadedConfig
+```
+
+### .argument(name, opts?)  — program / command
+Declares a positional. Same type/coercion rules as options.
+```ts
+type ArgumentOptions = {
+  required?: boolean;   // required or has default → non-optional key
+  default?: unknown;
+  type?: OptionsOptionType;
+  array?: boolean;      // collects trailing positionals into an array
+  description?: string;
+};
+```
+Read via `args` (camelCased). Bare `.argument('name')` resolves to
+`string | undefined`.
+
+### .hook(fn)  — program / group / command
+`fn(options)` runs BEFORE the action, with the fully-resolved options for the
+node. Group hooks run ancestor→leaf, then the leaf's own hook, then the action.
+Sync hook: `(options) => void`. Async hook: `(options) => Promise<void>` —
+awaited only by `startAsync()`; `start()` throws if a hook returns a promise.
+
+### .sub(name)  — program / group  → Group
+Opens a nested group (namespace). Chain `.option()/.hook()/.command()/.sub()` on
+it. No action.
+
+### .command(name)  — program / group  → Command
+Attaches a leaf command. Chain options/arguments/hook/description, finish with
+`.action()`.
+
+### .action(fn)  — program / command
+Terminal handler. Receives ONE object:
+```ts
+.action(({ command, options, args, rest }) => { /* … */ })
+```
+- `options`: `{ [flag]: T }` typed from every `.option()` / `.inject()` in scope.
+- `args`: `{ [name]: T }` typed from every `.argument()`.
+- `rest`: `string[]` — raw tokens after the first bare `--` (always present, `[]`
+  when none).
+- `command`: `string | undefined` — resolved command path.
+Return value may be a promise (then use `startAsync()`).
+
+### .start()  — root only
+Parses `process.argv`, dispatches to the resolved command. Throws if the action
+or any hook is async (use `startAsync()` instead). If parsing produced errors,
+the action does NOT run — the error handler is invoked instead.
+
+### .startAsync()  — root only
+Async variant: awaits hooks and the action. Returns `Promise<void>`.
+
+## Option types (`type` field)
+
+`OptionsOptionType` is one of:
+- `'string'` (default) → `string`
+- `'boolean'` → `boolean`. Bare `--flag` = `true`; `--flag=false` = `false`;
+  `--flag=true` = `true`.
+- `'number'` → `number` via `Number.parseFloat`; non-numeric → `invalid-value`.
+- `'date'` → `Date`, parsed by fecha with `dateFormat`; invalid/out-of-range →
+  `invalid-value` (carries `format`).
+- `'datetime'` → `Date`, parsed by fecha with `dateTimeFormat`.
+  Supported tokens (a non-localized subset of fecha's moment.js tokens):
+    date:      YYYY YY MM M DD D
+    datetime:  + HH H hh h  mm m  ss s  SSS SS S  A a  ZZ Z
+  Separators: `-` `/` `:` `.` and space. NOT supported: localized name tokens
+  (MMM/MMMM months, ddd/dddd days) — kapitan is numeric-only + AM/PM. fecha is
+  strict: fixed-width tokens reject `2026-7-3`; overflow (`2025-02-30`, hour 24)
+  → null → `invalid-value`. Note the casing is moment-style (UPPERCASE `DD`/`MM`/
+  `YYYY`), NOT date-fns (`dd`/`yyyy`) — the compile-time check flags that habit.
+  ESCAPE HATCH: set `dateFormat`/`dateTimeFormat` to the sentinel `'js'` to bypass
+  fecha and delegate to the platform `new Date()` parser (ISO 8601 + engine
+  extras) — for machine timestamps like `.toISOString()`. Laxer than fecha and
+  timezone-footgunned (date-only → UTC, date-time-without-offset → local);
+  validity is still enforced (unparseable → `invalid-value`).
+- `readonly [...]` enum tuple, e.g. `['dev','staging','prod']` → the union
+  `'dev' | 'staging' | 'prod'`; anything else → `invalid-enum` (lists choices).
+- `(value: string) => T` custom parser → `T`; throw inside it to reject (becomes
+  `invalid-value` with your message).
+
+`array: true` wraps the resolved type in `T[]` and collects one entry per
+occurrence of the flag (comma is NOT a separator).
+
+## Parsing behavior (important details)
+
+- kebab→camel: `--dry-run` is read as `options.dryRun`; `deploy-target` →
+  `deployTarget`.
+- `=` vs spaced: `--port=8080` ≡ `--port 8080`. A spaced value may begin with `-`
+  only if it looks like a negative number; otherwise → `missing-value`.
+- Short-flag clustering: `-abc` = `-a -b -c`. Arity-0 flags emit and continue;
+  the first value-taking flag consumes the remainder (`-p8080`, one `=` stripped).
+  Unknown cluster char → `unknown-option`. `-5` stays a positional.
+- Repeated options: array option collects each occurrence; non-array repeated →
+  `duplicate-option`.
+- `--` passthrough: the first bare `--` ends option/command parsing; everything
+  after it is collected raw into `rest`. Named positionals only draw from tokens
+  BEFORE the `--`.
+- Built-ins: `--help`/`-h` always recognized (never error, no config to disable).
+  `--version`/`-V` recognized only after `.version()`. Declaring your own
+  `--help`/`--version`/`-h`/`-V` overrides the built-in. `--no-help`/`--no-version`
+  are NOT special (→ `unknown-option`). A group invoked with no sub-command prints
+  its help (a `missing-command` situation rendered as help).
+
+## Errors
+
+Parsing accumulates all errors in one pass, then reports the batch ONCE; the
+action never runs if any error occurred. Default handler: write each `.message`
+to `stderr`, then `process.exit(1)`.
+
+Custom handler OWNS termination (no exit is forced — the dispatcher already
+aborts by not running the action):
+```ts
+program.config({
+  errorHandler: (errors) => {                 // errors: CliError[]
+    for (const e of errors) console.error(`[${e.code}] ${e.message}`);
+    process.exit(2);
+  },
+});
+```
+
+`CliError` shape:
+```ts
+type CliError = {
+  code: CliErrorCode;
+  message: string;   // ready-to-print
+  token: string;     // identifier AS INVOKED: '-c', '--name', a positional name,
+                     // or a command chain ('remote add', '' at root)
+  value?: unknown;   // offending input: string, or string[] for too-many-arguments
+  type?: OptionOptions['type']; // what was expected
+  format?: string;   // date/datetime format that was expected
+};
+type CliErrorCode =
+  | 'unknown-option' | 'duplicate-option' | 'missing-value' | 'missing-required'
+  | 'invalid-value'  | 'invalid-enum'     | 'unknown-command' | 'missing-command'
+  | 'missing-argument' | 'too-many-arguments';
+```
+Notes: `too-many-arguments` is ONE error for the whole surplus (`value` is the
+`string[]` of extra tokens, `token` is the command chain). `missing-required` →
+`Missing required parameter '--name'`. `invalid-enum` →
+`Invalid value 'x' for '--env' (choices: dev|staging|prod)`.
+
+## Complete examples
+
+### 1. Single command, mixed types
+```ts
+import { program } from 'kapitan';
+
+program
+  .version('1.0.0')
+  .description('Start the server.')
+  .option('name', { required: true })
+  .option('env', { type: ['dev', 'staging', 'prod'], default: 'dev' })
+  .option('port', { type: 'number', default: 3000 })
+  .option('verbose', { type: 'boolean', alias: [{ name: 'v', short: true }] })
+  .action(({ options }) => {
+    // options: { name: string; env: 'dev'|'staging'|'prod'; port: number; verbose?: boolean }
+    console.log(options);
+  });
+
+program.start();
+```
+
+### 2. Nested commands with inherited parent option
+```ts
+program
+  .option('verbose', { type: 'boolean' }) // inherited by deploy
+  .command('deploy')
+  .description('Deploy to an environment')
+  .option('env', { type: ['dev', 'staging', 'prod'], default: 'staging' })
+  .option('dry-run', { type: 'boolean' })
+  .action(({ options }) => {
+    // options: { verbose?: boolean; env: …; dryRun?: boolean }
+  });
+
+program.start();
+```
+
+### 3. Positional arguments + rest passthrough
+```ts
+program
+  .argument('script', { required: true })
+  .action(({ args, rest }) => {
+    // my-cli build.ts -- --flag-for-the-script x
+    // args.script === 'build.ts'; rest === ['--flag-for-the-script', 'x']
+    run(args.script, rest);
+  });
+
+program.start();
+```
+
+### 4. Hook + async action
+```ts
+program
+  .hook(async (options) => { await ensureAuth(options); })
+  .option('token', { required: true })
+  .action(async ({ options }) => { await deploy(options.token); });
+
+await program.startAsync(); // NOT start() — action/hook are async
+```
+
+### 5. Custom parser, injected clock, date option, custom error handler
+```ts
+program
+  .config({
+    dateFormat: 'DD/MM/YYYY',
+    errorHandler: (errors) => { for (const e of errors) log(e); process.exit(2); },
+  })
+  .inject('now', () => new Date())
+  .option('since', { type: 'date' })                       // → Date
+  .option('level', { type: (v) => { if (v === 'x') throw new Error('bad'); return v; } })
+  .option('tag', { array: true })                          // → string[]
+  .action(({ options }) => { /* options.now, options.since, options.tag */ });
+
+program.start();
+```
+
+## Common mistakes to avoid
+
+- Calling `start()` when the action or a hook is async → throws. Use
+  `startAsync()`.
+- Reading `options['dry-run']` — it is `options.dryRun` (camelCase).
+- Annotating the `action` parameter or a function return type — let TS infer.
+- Importing internals (`kapitan/src/parser` etc.) — only `program` and the
+  exported types are public.
+- Expecting comma-split arrays — use repeated flags (`--tag a --tag b`) with
+  `array: true`.
+- Putting an `.action()` on a `.sub()` group — groups have no action; use
+  `.command()` for leaves.

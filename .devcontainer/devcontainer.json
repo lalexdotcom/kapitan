@@ -19,9 +19,7 @@
 			"version": "latest"
 		}
 	},
-	"mounts": [
-		"source=ai-tools-config-${devcontainerId},target=/ai-tools,type=volume"
-	],
+	"mounts": ["source=ai-tools-config-${devcontainerId},target=/ai-tools,type=volume"],
 	"containerEnv": {
 		"CLAUDE_CONFIG_DIR": "/ai-tools/.claude",
 		"MEMPALACE_PALACE_PATH": "/ai-tools/.mempalace",
